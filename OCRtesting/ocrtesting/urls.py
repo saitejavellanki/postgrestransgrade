@@ -15,13 +15,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from ocrtesting.views import ClassView, StudentView, SubjectView, ScriptView, OCRDataView
+from ocrtesting.views import ClassView, StudentView, SubjectView, ScriptView, OCRDataView, KeyOCRView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('classes/', ClassView.as_view()),
     path('students/', StudentView.as_view()),
     path('subjects/', SubjectView.as_view()),
+    path('key-ocr/', KeyOCRView.as_view()),
     path('scripts/', ScriptView.as_view()),
     path('ocr/', OCRDataView.as_view()),
 ]
