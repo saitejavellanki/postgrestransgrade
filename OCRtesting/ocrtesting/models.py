@@ -1,4 +1,4 @@
-# models.py - Fixed version
+# models.py - Updated version with Image storage
 from django.db import models
 from django.core.exceptions import ValidationError
 
@@ -77,6 +77,27 @@ class Script(models.Model):
         # Ensure script's class_id matches student's class_id
         if self.student and self.class_id and self.class_id != self.student.class_id:
             raise ValidationError("Script's class must match student's class.")
+
+class ScriptImage(models.Model):
+    """
+    Stores the converted images from PDF pages for each script.
+    Multiple images can belong to the same script (multi-page PDFs).
+    """
+    image_id = models.AutoField(primary_key=True)
+    script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name='images')
+    page_number = models.IntegerField()
+    image_data = models.TextField()  # Base64 encoded image data
+    image_filename = models.CharField(max_length=255)
+    image_path = models.CharField(max_length=500, blank=True, null=True)  # Original path from conversion
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        # Ensure unique page per script
+        unique_together = ('script', 'page_number')
+        ordering = ['script', 'page_number']
+    
+    def __str__(self):
+        return f"Image: {self.script} - Page {self.page_number}"
 
 class OCRData(models.Model):
     ocr_id = models.AutoField(primary_key=True)

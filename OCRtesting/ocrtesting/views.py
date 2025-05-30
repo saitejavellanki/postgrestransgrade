@@ -1,4 +1,4 @@
-# views.py - Updated version with KeyOCR and Script modifications
+# views.py - Fixed version with proper error handling for ScriptImage
 from django.shortcuts import render
 import json
 from django.http import JsonResponse
@@ -6,7 +6,12 @@ from django.views import View
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.db import IntegrityError
-from .models import Class, Student, Subject, Script, OCRData, KeyOCR
+from django.core.exceptions import ValidationError
+import logging
+from .models import Class, Student, Subject, Script, OCRData, KeyOCR, ScriptImage
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 @method_decorator(csrf_exempt, name='dispatch')
 class ClassView(View):
@@ -22,6 +27,7 @@ class ClassView(View):
         except IntegrityError:
             return JsonResponse({'error': 'Class name already exists'}, status=400)
         except Exception as e:
+            logger.error(f"ClassView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
 
 
@@ -81,6 +87,7 @@ class StudentView(View):
         except IntegrityError:
             return JsonResponse({'error': 'Student with this roll number already exists in this class'}, status=400)
         except Exception as e:
+            logger.error(f"StudentView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
 
 
@@ -161,6 +168,7 @@ class SubjectView(View):
         except KeyError as e:
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
+            logger.error(f"SubjectView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
 
 
@@ -238,6 +246,7 @@ class KeyOCRView(View):
         except KeyError as e:
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
+            logger.error(f"KeyOCRView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
 
     def put(self, request):
@@ -275,6 +284,7 @@ class KeyOCRView(View):
         except KeyError as e:
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
+            logger.error(f"KeyOCRView PUT error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
 
 
@@ -357,9 +367,155 @@ class ScriptView(View):
         except KeyError as e:
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except IntegrityError as e:
+            logger.error(f"ScriptView POST IntegrityError: {str(e)}")
             return JsonResponse({'error': f'Script already exists for this student and subject'}, status=400)
         except Exception as e:
+            logger.error(f"ScriptView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ScriptImageView(View):
+    def get(self, request):
+        # Get query parameters for filtering
+        script_id = request.GET.get('script_id')
+        
+        if script_id:
+            # Return images for specific script
+            try:
+                script = Script.objects.get(script_id=script_id)
+                images = ScriptImage.objects.filter(script=script).order_by('page_number')
+                data = []
+                for image in images:
+                    data.append({
+                        'image_id': image.image_id,
+                        'script_id': image.script.script_id,
+                        'page_number': image.page_number,
+                        'image_data': image.image_data,
+                        'image_filename': image.image_filename,
+                        'image_path': image.image_path,
+                        'created_at': image.created_at
+                    })
+                return JsonResponse(data, safe=False)
+            except Script.DoesNotExist:
+                return JsonResponse({'error': 'Invalid script_id'}, status=400)
+        else:
+            # Return all script images
+            images = ScriptImage.objects.select_related('script').all()
+            data = []
+            for image in images:
+                data.append({
+                    'image_id': image.image_id,
+                    'script_id': image.script.script_id,
+                    'page_number': image.page_number,
+                    'image_data': image.image_data,
+                    'image_filename': image.image_filename,
+                    'image_path': image.image_path,
+                    'created_at': image.created_at
+                })
+            return JsonResponse(data, safe=False)
+
+    def post(self, request):
+        try:
+            # Log the incoming request for debugging
+            logger.info(f"ScriptImageView POST request received")
+            
+            # Parse JSON data
+            try:
+                data = json.loads(request.body)
+                logger.info(f"Parsed JSON data keys: {list(data.keys())}")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {str(e)}")
+                return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+            
+            # Validate required fields
+            required_fields = ['script_id', 'page_number', 'image_data', 'image_filename']
+            missing_fields = [field for field in required_fields if field not in data or data[field] is None]
+            
+            if missing_fields:
+                logger.error(f"Missing required fields: {missing_fields}")
+                return JsonResponse({'error': f'Missing required fields: {", ".join(missing_fields)}'}, status=400)
+            
+            # Validate data types and values
+            try:
+                script_id = int(data['script_id'])
+                page_number = int(data['page_number'])
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid data types: {str(e)}")
+                return JsonResponse({'error': 'script_id and page_number must be integers'}, status=400)
+            
+            if page_number < 1:
+                return JsonResponse({'error': 'page_number must be greater than 0'}, status=400)
+            
+            # Validate that script exists
+            try:
+                script = Script.objects.get(script_id=script_id)
+                logger.info(f"Found script: {script}")
+            except Script.DoesNotExist:
+                logger.error(f"Script not found: {script_id}")
+                return JsonResponse({'error': f'Script with ID {script_id} not found'}, status=400)
+            
+            # Check for existing image with same script and page number
+            existing_image = ScriptImage.objects.filter(
+                script=script,
+                page_number=page_number
+            ).first()
+            
+            if existing_image:
+                logger.warning(f"Image already exists for script {script_id}, page {page_number}")
+                return JsonResponse({
+                    'error': f'Image already exists for script {script_id}, page {page_number}',
+                    'image_id': existing_image.image_id
+                }, status=400)
+            
+            # Validate image data
+            image_data = data['image_data']
+            if not isinstance(image_data, str) or len(image_data.strip()) == 0:
+                return JsonResponse({'error': 'image_data must be a non-empty string'}, status=400)
+            
+            # Validate filename
+            image_filename = data['image_filename'].strip()
+            if not image_filename:
+                return JsonResponse({'error': 'image_filename cannot be empty'}, status=400)
+            
+            # Create script image with proper error handling
+            try:
+                image = ScriptImage.objects.create(
+                    script=script,
+                    page_number=page_number,
+                    image_data=image_data,
+                    image_filename=image_filename,
+                    image_path=data.get('image_path', '').strip()
+                )
+                
+                logger.info(f"Successfully created ScriptImage: {image.image_id}")
+                
+                return JsonResponse({
+                    'message': 'Script image saved successfully',
+                    'image_id': image.image_id,
+                    'script_id': script.script_id,
+                    'page_number': image.page_number,
+                    'image_filename': image.image_filename
+                })
+                
+            except IntegrityError as e:
+                logger.error(f"IntegrityError creating ScriptImage: {str(e)}")
+                return JsonResponse({
+                    'error': f'Image already exists for script {script_id}, page {page_number}'
+                }, status=400)
+            except ValidationError as e:
+                logger.error(f"ValidationError creating ScriptImage: {str(e)}")
+                return JsonResponse({'error': f'Validation error: {str(e)}'}, status=400)
+            except Exception as e:
+                logger.error(f"Unexpected error creating ScriptImage: {str(e)}")
+                return JsonResponse({'error': f'Database error: {str(e)}'}, status=500)
+                
+        except KeyError as e:
+            logger.error(f"KeyError in ScriptImageView POST: {str(e)}")
+            return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error in ScriptImageView POST: {str(e)}")
+            return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -432,4 +588,5 @@ class OCRDataView(View):
         except IntegrityError:
             return JsonResponse({'error': 'OCR data already exists for this script and page number'}, status=400)
         except Exception as e:
+            logger.error(f"OCRDataView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)

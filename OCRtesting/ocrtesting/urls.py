@@ -15,7 +15,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from ocrtesting.views import ClassView, StudentView, SubjectView, ScriptView, OCRDataView, KeyOCRView
+from ocrtesting.views import ClassView, StudentView, SubjectView, ScriptView, OCRDataView, KeyOCRView, ScriptImageView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -24,5 +24,6 @@ urlpatterns = [
     path('subjects/', SubjectView.as_view()),
     path('key-ocr/', KeyOCRView.as_view()),
     path('scripts/', ScriptView.as_view()),
+    path('script-images/', ScriptImageView.as_view()),
     path('ocr/', OCRDataView.as_view()),
 ]
