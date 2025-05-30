@@ -42,6 +42,7 @@ class KeyOCR(models.Model):
     key_ocr_id = models.AutoField(primary_key=True)
     subject = models.OneToOneField(Subject, on_delete=models.CASCADE, related_name='key_ocr')
     key_json = models.JSONField()
+    context = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     

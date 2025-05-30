@@ -180,6 +180,7 @@ class KeyOCRView(View):
                     'class_id': key_ocr.subject.class_id.class_id,
                     'class_name': key_ocr.subject.class_id.class_name,
                     'key_json': key_ocr.key_json,
+                    'context': key_ocr.context,
                     'created_at': key_ocr.created_at,
                     'updated_at': key_ocr.updated_at
                 }
@@ -198,6 +199,7 @@ class KeyOCRView(View):
                     'class_id': key_ocr.subject.class_id.class_id,
                     'class_name': key_ocr.subject.class_id.class_name,
                     'key_json': key_ocr.key_json,
+                    'context': key_ocr.context,
                     'created_at': key_ocr.created_at,
                     'updated_at': key_ocr.updated_at
                 })
@@ -219,10 +221,11 @@ class KeyOCRView(View):
                     'error': f'Key OCR already exists for subject "{subject.subject_name}"'
                 }, status=400)
             
-            # Create key OCR
+            # Create key OCR - make context optional
             key_ocr = KeyOCR.objects.create(
                 subject=subject,
-                key_json=data['key_json']
+                key_json=data['key_json'],
+                context=data.get('context', '')  # Use empty string as default if context not provided
             )
             
             return JsonResponse({
@@ -255,8 +258,13 @@ class KeyOCRView(View):
             else:
                 return JsonResponse({'error': 'Either subject_id or key_ocr_id is required'}, status=400)
             
-            # Update key JSON
-            key_ocr.key_json = data['key_json']
+            # Only update fields that are provided and not empty
+            if 'key_json' in data and data['key_json']:  # Only update if key_json is provided and not empty
+                key_ocr.key_json = data['key_json']
+            
+            if 'context' in data:  # Update context if provided (even if empty string)
+                key_ocr.context = data['context']
+            
             key_ocr.save()
             
             return JsonResponse({
