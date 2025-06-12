@@ -8,7 +8,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.db import IntegrityError
 from django.core.exceptions import ValidationError
 import logging
-from .models import Class, Student, Subject, Script, OCRData, KeyOCR, ScriptImage
+
+from .models import Class, Student, Subject, Script, OCRData, KeyOCR, ScriptImage, TextractOCR, CompareText
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -589,4 +590,548 @@ class OCRDataView(View):
             return JsonResponse({'error': 'OCR data already exists for this script and page number'}, status=400)
         except Exception as e:
             logger.error(f"OCRDataView POST error: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+
+# Add this import to your views.py file
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class TextractOCRView(View):
+    def get(self, request):
+        # Get query parameters for filtering
+        script_id = request.GET.get('script_id')
+        page_number = request.GET.get('page_number')
+        processing_status = request.GET.get('processing_status')
+        
+        textract_ocr = TextractOCR.objects.select_related('script')
+        
+        # Apply filters if provided
+        if script_id:
+            try:
+                script = Script.objects.get(script_id=script_id)
+                textract_ocr = textract_ocr.filter(script=script)
+            except Script.DoesNotExist:
+                return JsonResponse({'error': 'Invalid script_id'}, status=400)
+        
+        if page_number:
+            try:
+                page_num = int(page_number)
+                textract_ocr = textract_ocr.filter(page_number=page_num)
+            except ValueError:
+                return JsonResponse({'error': 'page_number must be an integer'}, status=400)
+        
+        if processing_status:
+            valid_statuses = ['pending', 'processing', 'completed', 'failed']
+            if processing_status not in valid_statuses:
+                return JsonResponse({'error': f'Invalid processing_status. Must be one of: {", ".join(valid_statuses)}'}, status=400)
+            textract_ocr = textract_ocr.filter(processing_status=processing_status)
+        
+        # Order by script and page number
+        textract_ocr = textract_ocr.order_by('script', 'page_number')
+        
+        data = []
+        for ocr in textract_ocr:
+            data.append({
+                'textract_ocr_id': ocr.textract_ocr_id,
+                'script_id': ocr.script.script_id,
+                'student_name': ocr.script.student.name,
+                'subject_name': ocr.script.subject.subject_name,
+                'class_name': ocr.script.class_id.class_name,
+                'page_number': ocr.page_number,
+                'extracted_text_json': ocr.extracted_text_json,
+                'confidence_score': ocr.confidence_score,
+                'processing_status': ocr.processing_status,
+                'error_message': ocr.error_message,
+                'created_at': ocr.created_at,
+                'updated_at': ocr.updated_at
+            })
+        return JsonResponse(data, safe=False)
+
+    def post(self, request):
+        try:
+            # Log the incoming request for debugging
+            logger.info(f"TextractOCRView POST request received")
+            
+            # Parse JSON data
+            try:
+                data = json.loads(request.body)
+                logger.info(f"Parsed JSON data keys: {list(data.keys())}")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {str(e)}")
+                return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+            
+            # Validate required fields
+            required_fields = ['script_id', 'page_number', 'extracted_text_json']
+            missing_fields = [field for field in required_fields if field not in data or data[field] is None]
+            
+            if missing_fields:
+                logger.error(f"Missing required fields: {missing_fields}")
+                return JsonResponse({'error': f'Missing required fields: {", ".join(missing_fields)}'}, status=400)
+            
+            # Validate data types and values
+            try:
+                script_id = int(data['script_id'])
+                page_number = int(data['page_number'])
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid data types: {str(e)}")
+                return JsonResponse({'error': 'script_id and page_number must be integers'}, status=400)
+            
+            if page_number < 1:
+                return JsonResponse({'error': 'page_number must be greater than 0'}, status=400)
+            
+            # Validate that script exists
+            try:
+                script = Script.objects.get(script_id=script_id)
+                logger.info(f"Found script: {script}")
+            except Script.DoesNotExist:
+                logger.error(f"Script not found: {script_id}")
+                return JsonResponse({'error': f'Script with ID {script_id} not found'}, status=400)
+            
+            # Check for existing TextractOCR with same script and page number
+            existing_ocr = TextractOCR.objects.filter(
+                script=script,
+                page_number=page_number
+            ).first()
+            
+            if existing_ocr:
+                logger.warning(f"TextractOCR already exists for script {script_id}, page {page_number}")
+                return JsonResponse({
+                    'error': f'TextractOCR already exists for script {script_id}, page {page_number}',
+                    'textract_ocr_id': existing_ocr.textract_ocr_id
+                }, status=400)
+            
+            # Validate processing status if provided
+            processing_status = data.get('processing_status', 'completed')
+            valid_statuses = ['pending', 'processing', 'completed', 'failed']
+            if processing_status not in valid_statuses:
+                return JsonResponse({'error': f'Invalid processing_status. Must be one of: {", ".join(valid_statuses)}'}, status=400)
+            
+            # Validate confidence score if provided
+            confidence_score = data.get('confidence_score')
+            if confidence_score is not None:
+                try:
+                    confidence_score = float(confidence_score)
+                    if not (0.0 <= confidence_score <= 1.0):
+                        return JsonResponse({'error': 'confidence_score must be between 0.0 and 1.0'}, status=400)
+                except (ValueError, TypeError):
+                    return JsonResponse({'error': 'confidence_score must be a valid number'}, status=400)
+            
+            # Create TextractOCR with proper error handling
+            try:
+                textract_ocr = TextractOCR.objects.create(
+                    script=script,
+                    page_number=page_number,
+                    extracted_text_json=data['extracted_text_json'],
+                    confidence_score=confidence_score,
+                    processing_status=processing_status,
+                    error_message=data.get('error_message', '')
+                )
+                
+                logger.info(f"Successfully created TextractOCR: {textract_ocr.textract_ocr_id}")
+                
+                return JsonResponse({
+                    'message': 'TextractOCR created successfully',
+                    'textract_ocr_id': textract_ocr.textract_ocr_id,
+                    'script_id': script.script_id,
+                    'page_number': textract_ocr.page_number,
+                    'processing_status': textract_ocr.processing_status
+                })
+                
+            except IntegrityError as e:
+                logger.error(f"IntegrityError creating TextractOCR: {str(e)}")
+                return JsonResponse({
+                    'error': f'TextractOCR already exists for script {script_id}, page {page_number}'
+                }, status=400)
+            except ValidationError as e:
+                logger.error(f"ValidationError creating TextractOCR: {str(e)}")
+                return JsonResponse({'error': f'Validation error: {str(e)}'}, status=400)
+            except Exception as e:
+                logger.error(f"Unexpected error creating TextractOCR: {str(e)}")
+                return JsonResponse({'error': f'Database error: {str(e)}'}, status=500)
+                
+        except KeyError as e:
+            logger.error(f"KeyError in TextractOCRView POST: {str(e)}")
+            return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error in TextractOCRView POST: {str(e)}")
+            return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
+
+    def put(self, request):
+        try:
+            data = json.loads(request.body)
+            
+            # Get TextractOCR by textract_ocr_id
+            if 'textract_ocr_id' not in data:
+                return JsonResponse({'error': 'textract_ocr_id is required for updates'}, status=400)
+            
+            try:
+                textract_ocr = TextractOCR.objects.get(textract_ocr_id=data['textract_ocr_id'])
+            except TextractOCR.DoesNotExist:
+                return JsonResponse({'error': 'TextractOCR not found'}, status=404)
+            
+            # Update fields that are provided
+            if 'extracted_text_json' in data and data['extracted_text_json']:
+                textract_ocr.extracted_text_json = data['extracted_text_json']
+            
+            if 'confidence_score' in data:
+                confidence_score = data['confidence_score']
+                if confidence_score is not None:
+                    try:
+                        confidence_score = float(confidence_score)
+                        if not (0.0 <= confidence_score <= 1.0):
+                            return JsonResponse({'error': 'confidence_score must be between 0.0 and 1.0'}, status=400)
+                        textract_ocr.confidence_score = confidence_score
+                    except (ValueError, TypeError):
+                        return JsonResponse({'error': 'confidence_score must be a valid number'}, status=400)
+                else:
+                    textract_ocr.confidence_score = None
+            
+            if 'processing_status' in data:
+                processing_status = data['processing_status']
+                valid_statuses = ['pending', 'processing', 'completed', 'failed']
+                if processing_status not in valid_statuses:
+                    return JsonResponse({'error': f'Invalid processing_status. Must be one of: {", ".join(valid_statuses)}'}, status=400)
+                textract_ocr.processing_status = processing_status
+            
+            if 'error_message' in data:
+                textract_ocr.error_message = data['error_message']
+            
+            textract_ocr.save()
+            
+            return JsonResponse({
+                'message': 'TextractOCR updated successfully',
+                'textract_ocr_id': textract_ocr.textract_ocr_id,
+                'processing_status': textract_ocr.processing_status
+            })
+            
+        except KeyError as e:
+            return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
+        except Exception as e:
+            logger.error(f"TextractOCRView PUT error: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+        
+@method_decorator(csrf_exempt, name='dispatch')
+class CombinedDataView(View):
+    def get(self, request):
+        try:
+            # Get query parameters
+            subject_id = request.GET.get('subject_id')
+            script_id = request.GET.get('script_id')
+            
+            # Validate that at least one parameter is provided
+            if not subject_id and not script_id:
+                return JsonResponse({
+                    'error': 'Either subject_id or script_id is required'
+                }, status=400)
+            
+            response_data = {}
+            
+            # Retrieve context from KeyOCR based on subject_id
+            if subject_id:
+                try:
+                    subject_id = int(subject_id)
+                    
+                    try:
+                        key_ocr = KeyOCR.objects.select_related('subject', 'subject__class_id').get(subject_id=subject_id)
+                        response_data['context'] = key_ocr.context
+                    except KeyOCR.DoesNotExist:
+                        response_data['context'] = None
+                    
+                except (ValueError, TypeError):
+                    response_data['context'] = None
+            
+            # Retrieve OCR JSON and Textract results based on script_id
+            if script_id:
+                try:
+                    script_id = int(script_id)
+                    
+                    try:
+                        script = Script.objects.select_related('student', 'subject', 'class_id').get(script_id=script_id)
+                        
+                        # Get OCR JSON data
+                        ocr_data = OCRData.objects.filter(script=script).order_by('page_number')
+                        
+                        if ocr_data.exists():
+                            ocr_json_data = []
+                            seen_ocr_data = set()
+                            
+                            for ocr in ocr_data:
+                                current_ocr_data = None
+                                
+                                if isinstance(ocr.ocr_json, (list, dict)):
+                                    current_ocr_data = ocr.ocr_json
+                                elif isinstance(ocr.ocr_json, str):
+                                    try:
+                                        current_ocr_data = json.loads(ocr.ocr_json)
+                                    except json.JSONDecodeError:
+                                        current_ocr_data = ocr.ocr_json
+                                else:
+                                    current_ocr_data = ocr.ocr_json
+                                
+                                # Handle deduplication for OCR data
+                                if isinstance(current_ocr_data, list):
+                                    for item in current_ocr_data:
+                                        item_hash = hash(json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item))
+                                        if item_hash not in seen_ocr_data:
+                                            seen_ocr_data.add(item_hash)
+                                            ocr_json_data.append(item)
+                                else:
+                                    item_hash = hash(json.dumps(current_ocr_data, sort_keys=True) if isinstance(current_ocr_data, dict) else str(current_ocr_data))
+                                    if item_hash not in seen_ocr_data:
+                                        seen_ocr_data.add(item_hash)
+                                        ocr_json_data.append(current_ocr_data)
+                            
+                            response_data['ocr_json'] = ocr_json_data
+                        else:
+                            response_data['ocr_json'] = []
+                        
+                        # Get Textract results
+                        textract_data = TextractOCR.objects.filter(script=script).order_by('page_number')
+                        
+                        if textract_data.exists():
+                            textract_results = []
+                            seen_textract_data = set()
+                            
+                            for textract_ocr in textract_data:
+                                current_textract_data = None
+                                
+                                if isinstance(textract_ocr.extracted_text_json, (list, dict)):
+                                    current_textract_data = textract_ocr.extracted_text_json
+                                elif isinstance(textract_ocr.extracted_text_json, str):
+                                    try:
+                                        current_textract_data = json.loads(textract_ocr.extracted_text_json)
+                                    except json.JSONDecodeError:
+                                        current_textract_data = textract_ocr.extracted_text_json
+                                else:
+                                    current_textract_data = textract_ocr.extracted_text_json
+                                
+                                # Create simplified Textract entry
+                                textract_entry = {
+                                    'page_number': textract_ocr.page_number,
+                                    'extracted_text': current_textract_data,
+                                    'confidence_score': textract_ocr.confidence_score,
+                                    'processing_status': textract_ocr.processing_status
+                                }
+                                
+                                # Handle deduplication
+                                entry_hash = hash(json.dumps(textract_entry, sort_keys=True, default=str))
+                                if entry_hash not in seen_textract_data:
+                                    seen_textract_data.add(entry_hash)
+                                    textract_results.append(textract_entry)
+                            
+                            response_data['textract_results'] = textract_results
+                        else:
+                            response_data['textract_results'] = []
+                            
+                    except Script.DoesNotExist:
+                        response_data['ocr_json'] = []
+                        response_data['textract_results'] = []
+                        
+                except (ValueError, TypeError):
+                    response_data['ocr_json'] = []
+                    response_data['textract_results'] = []
+            
+            return JsonResponse(response_data)
+            
+        except Exception as e:
+            logger.error(f"CombinedDataView GET error: {str(e)}")
+            return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class CompareTextView(View):
+    def get(self, request):
+        # Get query parameters for filtering
+        script_id = request.GET.get('script_id')
+        compare_text_id = request.GET.get('compare_text_id')
+        
+        if compare_text_id:
+            # Return specific compare text record
+            try:
+                compare_text = CompareText.objects.select_related('script', 'script__student', 'script__subject', 'script__class_id').get(compare_text_id=compare_text_id)
+                data = {
+                    'compare_text_id': compare_text.compare_text_id,
+                    'script_id': compare_text.script.script_id,
+                    'student_name': compare_text.script.student.name,
+                    'subject_name': compare_text.script.subject.subject_name,
+                    'class_name': compare_text.script.class_id.class_name,
+                    'vlmdesc': compare_text.vlmdesc,
+                    'restructured': compare_text.restructured,
+                    'final_corrected_text': compare_text.final_corrected_text,
+                    'created_at': compare_text.created_at,
+                    'updated_at': compare_text.updated_at
+                }
+                return JsonResponse(data)
+            except CompareText.DoesNotExist:
+                return JsonResponse({'error': 'CompareText record not found'}, status=404)
+        
+        elif script_id:
+            # Return compare text records for specific script
+            try:
+                script = Script.objects.get(script_id=script_id)
+                compare_texts = CompareText.objects.filter(script=script).order_by('-created_at')
+                data = []
+                for compare_text in compare_texts:
+                    data.append({
+                        'compare_text_id': compare_text.compare_text_id,
+                        'script_id': compare_text.script.script_id,
+                        'student_name': compare_text.script.student.name,
+                        'subject_name': compare_text.script.subject.subject_name,
+                        'class_name': compare_text.script.class_id.class_name,
+                        'vlmdesc': compare_text.vlmdesc,
+                        'restructured': compare_text.restructured,
+                        'final_corrected_text': compare_text.final_corrected_text,
+                        'created_at': compare_text.created_at,
+                        'updated_at': compare_text.updated_at
+                    })
+                return JsonResponse(data, safe=False)
+            except Script.DoesNotExist:
+                return JsonResponse({'error': 'Invalid script_id'}, status=400)
+        
+        else:
+            # Return all compare text records
+            compare_texts = CompareText.objects.select_related('script', 'script__student', 'script__subject', 'script__class_id').all()
+            data = []
+            for compare_text in compare_texts:
+                data.append({
+                    'compare_text_id': compare_text.compare_text_id,
+                    'script_id': compare_text.script.script_id,
+                    'student_name': compare_text.script.student.name,
+                    'subject_name': compare_text.script.subject.subject_name,
+                    'class_name': compare_text.script.class_id.class_name,
+                    'vlmdesc': compare_text.vlmdesc,
+                    'restructured': compare_text.restructured,
+                    'final_corrected_text': compare_text.final_corrected_text,
+                    'created_at': compare_text.created_at,
+                    'updated_at': compare_text.updated_at
+                })
+            return JsonResponse(data, safe=False)
+
+    def post(self, request):
+        try:
+            # Log the incoming request for debugging
+            logger.info(f"CompareTextView POST request received")
+            
+            # Parse JSON data
+            try:
+                data = json.loads(request.body)
+                logger.info(f"Parsed JSON data keys: {list(data.keys())}")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {str(e)}")
+                return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+            
+            # Validate required fields
+            required_fields = ['script_id', 'vlmdesc', 'restructured', 'final_corrected_text']
+            missing_fields = [field for field in required_fields if field not in data or data[field] is None]
+            
+            if missing_fields:
+                logger.error(f"Missing required fields: {missing_fields}")
+                return JsonResponse({'error': f'Missing required fields: {", ".join(missing_fields)}'}, status=400)
+            
+            # Validate data types
+            try:
+                script_id = int(data['script_id'])
+            except (ValueError, TypeError) as e:
+                logger.error(f"Invalid data type for script_id: {str(e)}")
+                return JsonResponse({'error': 'script_id must be an integer'}, status=400)
+            
+            # Validate that script exists
+            try:
+                script = Script.objects.get(script_id=script_id)
+                logger.info(f"Found script: {script}")
+            except Script.DoesNotExist:
+                logger.error(f"Script not found: {script_id}")
+                return JsonResponse({'error': f'Script with ID {script_id} not found'}, status=400)
+            
+            # Create CompareText with proper error handling
+            try:
+                compare_text = CompareText.objects.create(
+                    script=script,
+                    vlmdesc=data['vlmdesc'],
+                    restructured=data['restructured'],
+                    final_corrected_text=data['final_corrected_text']
+                )
+                
+                logger.info(f"Successfully created CompareText: {compare_text.compare_text_id}")
+                
+                return JsonResponse({
+                    'message': 'CompareText created successfully',
+                    'compare_text_id': compare_text.compare_text_id,
+                    'script_id': script.script_id
+                })
+                
+            except ValidationError as e:
+                logger.error(f"ValidationError creating CompareText: {str(e)}")
+                return JsonResponse({'error': f'Validation error: {str(e)}'}, status=400)
+            except Exception as e:
+                logger.error(f"Unexpected error creating CompareText: {str(e)}")
+                return JsonResponse({'error': f'Database error: {str(e)}'}, status=500)
+                
+        except KeyError as e:
+            logger.error(f"KeyError in CompareTextView POST: {str(e)}")
+            return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
+        except Exception as e:
+            logger.error(f"Unexpected error in CompareTextView POST: {str(e)}")
+            return JsonResponse({'error': f'Server error: {str(e)}'}, status=500)
+
+    def put(self, request):
+        try:
+            data = json.loads(request.body)
+            
+            # Get CompareText by compare_text_id
+            if 'compare_text_id' not in data:
+                return JsonResponse({'error': 'compare_text_id is required for updates'}, status=400)
+            
+            try:
+                compare_text = CompareText.objects.get(compare_text_id=data['compare_text_id'])
+            except CompareText.DoesNotExist:
+                return JsonResponse({'error': 'CompareText record not found'}, status=404)
+            
+            # Update fields that are provided
+            if 'vlmdesc' in data and data['vlmdesc'] is not None:
+                compare_text.vlmdesc = data['vlmdesc']
+            
+            if 'restructured' in data and data['restructured'] is not None:
+                compare_text.restructured = data['restructured']
+            
+            if 'final_corrected_text' in data and data['final_corrected_text'] is not None:
+                compare_text.final_corrected_text = data['final_corrected_text']
+            
+            compare_text.save()
+            
+            return JsonResponse({
+                'message': 'CompareText updated successfully',
+                'compare_text_id': compare_text.compare_text_id
+            })
+            
+        except KeyError as e:
+            return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
+        except Exception as e:
+            logger.error(f"CompareTextView PUT error: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+
+    def delete(self, request):
+        try:
+            data = json.loads(request.body)
+            
+            # Get CompareText by compare_text_id
+            if 'compare_text_id' not in data:
+                return JsonResponse({'error': 'compare_text_id is required for deletion'}, status=400)
+            
+            try:
+                compare_text = CompareText.objects.get(compare_text_id=data['compare_text_id'])
+                compare_text_id = compare_text.compare_text_id
+                compare_text.delete()
+                
+                return JsonResponse({
+                    'message': 'CompareText deleted successfully',
+                    'compare_text_id': compare_text_id
+                })
+                
+            except CompareText.DoesNotExist:
+                return JsonResponse({'error': 'CompareText record not found'}, status=404)
+            
+        except KeyError as e:
+            return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
+        except Exception as e:
+            logger.error(f"CompareTextView DELETE error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)

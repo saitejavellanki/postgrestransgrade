@@ -1,4 +1,4 @@
-# models.py - Updated version with Image storage
+# models.py - Updated version with TextractOCR and CompareText tables
 from django.db import models
 from django.core.exceptions import ValidationError
 
@@ -54,7 +54,7 @@ class Script(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='scripts')
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='scripts')
     # Add the missing class_id field
-    class_id = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='scripts',default = 1)
+    class_id = models.ForeignKey(Class, on_delete=models.CASCADE, related_name='scripts', default=1)
     uploaded_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -99,6 +99,38 @@ class ScriptImage(models.Model):
     def __str__(self):
         return f"Image: {self.script} - Page {self.page_number}"
 
+class TextractOCR(models.Model):
+    """
+    Stores the Textract OCR extracted text data for multiple pages under the same script.
+    Each record represents OCR data for a specific page of a script.
+    """
+    textract_ocr_id = models.AutoField(primary_key=True)
+    script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name='textract_ocr_data')
+    page_number = models.IntegerField()
+    extracted_text_json = models.JSONField()  # JSON containing the extracted text data
+    confidence_score = models.FloatField(blank=True, null=True)  # Optional confidence score
+    processing_status = models.CharField(
+        max_length=20, 
+        choices=[
+            ('pending', 'Pending'),
+            ('processing', 'Processing'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed')
+        ],
+        default='completed'
+    )
+    error_message = models.TextField(blank=True, null=True)  # Store any error messages
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        # Ensure unique page per script for Textract OCR
+        unique_together = ('script', 'page_number')
+        ordering = ['script', 'page_number']
+    
+    def __str__(self):
+        return f"Textract OCR: {self.script} - Page {self.page_number}"
+
 class OCRData(models.Model):
     ocr_id = models.AutoField(primary_key=True)
     script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name='ocr_data')
@@ -114,3 +146,19 @@ class OCRData(models.Model):
     
     def __str__(self):
         return f"OCR Data: {self.script} - Page {self.page_number}"
+
+class CompareText(models.Model):
+    """
+    Stores comparison data for text analysis and corrections.
+    Contains flagged text, corrected text, and final corrected text for each script.
+    """
+    compare_text_id = models.AutoField(primary_key=True)
+    script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name='compare_texts')
+    vlmdesc = models.JSONField(default=dict)  # JSON field containing flagged text data
+    restructured = models.JSONField(default=dict)  # JSON field containing corrected text data
+    final_corrected_text = models.TextField(default='')  # Text containing final corrected data
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Compare Text: {self.script}"

@@ -15,7 +15,18 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from ocrtesting.views import ClassView, StudentView, SubjectView, ScriptView, OCRDataView, KeyOCRView, ScriptImageView
+from ocrtesting.views import (
+    ClassView, 
+    StudentView, 
+    SubjectView, 
+    ScriptView, 
+    OCRDataView, 
+    KeyOCRView, 
+    ScriptImageView,
+    TextractOCRView,
+    CombinedDataView,
+    CompareTextView  # Add this import
+)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -25,5 +36,10 @@ urlpatterns = [
     path('key-ocr/', KeyOCRView.as_view()),
     path('scripts/', ScriptView.as_view()),
     path('script-images/', ScriptImageView.as_view()),
+    path('textract-ocr/', TextractOCRView.as_view()),
     path('ocr/', OCRDataView.as_view()),
+    # New combined endpoint
+    path('combined-data/', CombinedDataView.as_view()),
+    # CompareText endpoint
+    path('compare-text/', CompareTextView.as_view()),
 ]
