@@ -25,7 +25,8 @@ from ocrtesting.views import (
     ScriptImageView,
     TextractOCRView,
     CombinedDataView,
-    CompareTextView  # Add this import
+    CompareTextView,
+    ResultView  # Add ResultView import
 )
 
 urlpatterns = [
@@ -42,4 +43,6 @@ urlpatterns = [
     path('combined-data/', CombinedDataView.as_view()),
     # CompareText endpoint
     path('compare-text/', CompareTextView.as_view()),
+    # Result endpoint
+    path('results/', ResultView.as_view()),
 ]

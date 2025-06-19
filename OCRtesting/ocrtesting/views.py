@@ -9,7 +9,7 @@ from django.db import IntegrityError
 from django.core.exceptions import ValidationError
 import logging
 
-from .models import Class, Student, Subject, Script, OCRData, KeyOCR, ScriptImage, TextractOCR, CompareText
+from .models import Class, Student, Subject, Script, OCRData, KeyOCR, ScriptImage, TextractOCR, CompareText, Result
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -190,6 +190,7 @@ class KeyOCRView(View):
                     'class_name': key_ocr.subject.class_id.class_name,
                     'key_json': key_ocr.key_json,
                     'context': key_ocr.context,
+                    'rubrics': key_ocr.rubrics,
                     'created_at': key_ocr.created_at,
                     'updated_at': key_ocr.updated_at
                 }
@@ -209,6 +210,7 @@ class KeyOCRView(View):
                     'class_name': key_ocr.subject.class_id.class_name,
                     'key_json': key_ocr.key_json,
                     'context': key_ocr.context,
+                    'rubrics': key_ocr.rubrics,
                     'created_at': key_ocr.created_at,
                     'updated_at': key_ocr.updated_at
                 })
@@ -230,11 +232,12 @@ class KeyOCRView(View):
                     'error': f'Key OCR already exists for subject "{subject.subject_name}"'
                 }, status=400)
             
-            # Create key OCR - make context optional
+            # Create key OCR - make context and rubrics optional
             key_ocr = KeyOCR.objects.create(
                 subject=subject,
                 key_json=data['key_json'],
-                context=data.get('context', '')  # Use empty string as default if context not provided
+                context=data.get('context', ''),  # Use empty string as default if context not provided
+                rubrics=data.get('rubrics', '')  # Use empty string as default if rubrics not provided
             )
             
             return JsonResponse({
@@ -274,6 +277,9 @@ class KeyOCRView(View):
             
             if 'context' in data:  # Update context if provided (even if empty string)
                 key_ocr.context = data['context']
+            
+            if 'rubrics' in data:  # Update rubrics if provided (even if empty string)
+                key_ocr.rubrics = data['rubrics']
             
             key_ocr.save()
             
@@ -1134,4 +1140,222 @@ class CompareTextView(View):
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
             logger.error(f"CompareTextView DELETE error: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+        
+@method_decorator(csrf_exempt, name='dispatch')
+class ResultView(View):
+    def get(self, request):
+        # Get script_id from query parameters if provided
+        script_id = request.GET.get('script_id')
+        result_id = request.GET.get('result_id')
+        
+        if result_id:
+            # Return specific result by result_id
+            try:
+                result = Result.objects.select_related('script__student', 'script__subject', 'script__class_id').get(result_id=result_id)
+                data = {
+                    'result_id': result.result_id,
+                    'script_id': result.script.script_id,
+                    'student_name': result.script.student.name,
+                    'student_roll_number': result.script.student.roll_number,
+                    'subject_name': result.script.subject.subject_name,
+                    'class_name': result.script.class_id.class_name,
+                    'restructuredtext': result.restructuredtext,
+                    'scored': result.scored,
+                    'graded': result.graded,
+                    'created_at': result.created_at,
+                    'updated_at': result.updated_at
+                }
+                return JsonResponse(data)
+            except Result.DoesNotExist:
+                return JsonResponse({'error': 'Result not found'}, status=404)
+        
+        elif script_id:
+            # Return results for specific script
+            try:
+                script = Script.objects.get(script_id=script_id)
+                results = Result.objects.filter(script=script).select_related('script__student', 'script__subject', 'script__class_id')
+                data = []
+                for result in results:
+                    data.append({
+                        'result_id': result.result_id,
+                        'script_id': result.script.script_id,
+                        'student_name': result.script.student.name,
+                        'student_roll_number': result.script.student.roll_number,
+                        'subject_name': result.script.subject.subject_name,
+                        'class_name': result.script.class_id.class_name,
+                        'restructuredtext': result.restructuredtext,
+                        'scored': result.scored,
+                        'graded': result.graded,
+                        'created_at': result.created_at,
+                        'updated_at': result.updated_at
+                    })
+                return JsonResponse(data, safe=False)
+            except Script.DoesNotExist:
+                return JsonResponse({'error': 'Invalid script_id'}, status=400)
+        else:
+            # Return all results with related information
+            results = Result.objects.select_related('script__student', 'script__subject', 'script__class_id').all()
+            data = []
+            for result in results:
+                data.append({
+                    'result_id': result.result_id,
+                    'script_id': result.script.script_id,
+                    'student_name': result.script.student.name,
+                    'student_roll_number': result.script.student.roll_number,
+                    'subject_name': result.script.subject.subject_name,
+                    'class_name': result.script.class_id.class_name,
+                    'restructuredtext': result.restructuredtext,
+                    'scored': result.scored,
+                    'graded': result.graded,
+                    'created_at': result.created_at,
+                    'updated_at': result.updated_at
+                })
+            return JsonResponse(data, safe=False)
+
+    def post(self, request):
+        """Create a new result record"""
+        try:
+            data = json.loads(request.body)
+            script_id = data.get('script_id')
+            
+            if not script_id:
+                return JsonResponse({'error': 'script_id is required'}, status=400)
+            
+            # Get the actual Script object from DB
+            try:
+                script_obj = Script.objects.get(script_id=script_id)
+            except Script.DoesNotExist:
+                return JsonResponse({'error': 'Invalid script_id'}, status=400)
+            
+            # Check if result already exists for this script
+            if Result.objects.filter(script=script_obj).exists():
+                return JsonResponse({'error': 'Result already exists for this script'}, status=400)
+            
+            # Validate JSON fields if provided
+            restructuredtext = data.get('restructuredtext', {})
+            scored = data.get('scored', {})
+            graded = data.get('graded', {})
+            
+            # Ensure they are valid JSON objects (dict or list)
+            if not isinstance(restructuredtext, (dict, list)):
+                return JsonResponse({'error': 'restructuredtext must be a valid JSON object or array'}, status=400)
+            if not isinstance(scored, (dict, list)):
+                return JsonResponse({'error': 'scored must be a valid JSON object or array'}, status=400)
+            if not isinstance(graded, (dict, list)):
+                return JsonResponse({'error': 'graded must be a valid JSON object or array'}, status=400)
+            
+            # Create result with provided data
+            result = Result.objects.create(
+                script=script_obj,
+                restructuredtext=restructuredtext,
+                scored=scored,
+                graded=graded
+            )
+
+            return JsonResponse({
+                'message': 'Result created successfully',
+                'result_id': result.result_id,
+                'script_id': script_obj.script_id
+            })
+        
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
+        except Exception as e:
+            logger.error(f"ResultView POST error: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+
+    def put(self, request):
+        """Update specific fields of an existing result"""
+        try:
+            data = json.loads(request.body)
+            result_id = data.get('result_id')
+            
+            if not result_id:
+                return JsonResponse({'error': 'result_id is required for updates'}, status=400)
+            
+            try:
+                result = Result.objects.get(result_id=result_id)
+            except Result.DoesNotExist:
+                return JsonResponse({'error': 'Result not found'}, status=404)
+            
+            # Track which fields are being updated
+            updated_fields = []
+            
+            # Update restructuredtext if provided
+            if 'restructuredtext' in data:
+                restructuredtext = data['restructuredtext']
+                if not isinstance(restructuredtext, (dict, list)):
+                    return JsonResponse({'error': 'restructuredtext must be a valid JSON object or array'}, status=400)
+                result.restructuredtext = restructuredtext
+                updated_fields.append('restructuredtext')
+            
+            # Update scored if provided
+            if 'scored' in data:
+                scored = data['scored']
+                if not isinstance(scored, (dict, list)):
+                    return JsonResponse({'error': 'scored must be a valid JSON object or array'}, status=400)
+                result.scored = scored
+                updated_fields.append('scored')
+            
+            # Update graded if provided
+            if 'graded' in data:
+                graded = data['graded']
+                if not isinstance(graded, (dict, list)):
+                    return JsonResponse({'error': 'graded must be a valid JSON object or array'}, status=400)
+                result.graded = graded
+                updated_fields.append('graded')
+            
+            if not updated_fields:
+                return JsonResponse({'error': 'No valid fields provided for update'}, status=400)
+            
+            # Save the updated result
+            result.save()
+            
+            return JsonResponse({
+                'message': f'Result updated successfully. Updated fields: {", ".join(updated_fields)}',
+                'result_id': result.result_id,
+                'updated_fields': updated_fields
+            })
+        
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
+        except Exception as e:
+            logger.error(f"ResultView PUT error: {str(e)}")
+            return JsonResponse({'error': str(e)}, status=500)
+
+    def patch(self, request):
+        """Alternative method for partial updates (same as PUT in this implementation)"""
+        return self.put(request)
+
+    def delete(self, request):
+        """Delete a result record"""
+        try:
+            data = json.loads(request.body)
+            result_id = data.get('result_id')
+            
+            if not result_id:
+                return JsonResponse({'error': 'result_id is required for deletion'}, status=400)
+            
+            try:
+                result = Result.objects.get(result_id=result_id)
+                script_info = {
+                    'script_id': result.script.script_id,
+                    'student_name': result.script.student.name,
+                    'subject_name': result.script.subject.subject_name
+                }
+                result.delete()
+                
+                return JsonResponse({
+                    'message': 'Result deleted successfully',
+                    'deleted_result_id': result_id,
+                    'script_info': script_info
+                })
+            except Result.DoesNotExist:
+                return JsonResponse({'error': 'Result not found'}, status=404)
+        
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON in request body'}, status=400)
+        except Exception as e:
+            logger.error(f"ResultView DELETE error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)

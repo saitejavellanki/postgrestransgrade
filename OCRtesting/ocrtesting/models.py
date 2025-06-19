@@ -43,6 +43,7 @@ class KeyOCR(models.Model):
     subject = models.OneToOneField(Subject, on_delete=models.CASCADE, related_name='key_ocr')
     key_json = models.JSONField()
     context = models.TextField(blank=True, null=True)
+    rubrics = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -138,7 +139,7 @@ class OCRData(models.Model):
     ocr_json = models.JSONField()
     structured_json = models.JSONField()
     context = models.TextField()
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True) 
     
     class Meta:
         # Ensure unique page per script
@@ -162,3 +163,18 @@ class CompareText(models.Model):
 
     def __str__(self):
         return f"Compare Text: {self.script}"
+
+class Result(models.Model):
+    """
+    Stores the final result data for each script including restructured text, scores and grades.
+    """
+    result_id = models.AutoField(primary_key=True)
+    script = models.ForeignKey(Script, on_delete=models.CASCADE, related_name='results')
+    restructuredtext = models.JSONField()
+    scored = models.JSONField()
+    graded = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Result: {self.script}"
