@@ -172,7 +172,6 @@ class SubjectView(View):
             logger.error(f"SubjectView POST error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
 
-
 @method_decorator(csrf_exempt, name='dispatch')
 class KeyOCRView(View):
     def get(self, request):
@@ -191,6 +190,7 @@ class KeyOCRView(View):
                     'key_json': key_ocr.key_json,
                     'context': key_ocr.context,
                     'rubrics': key_ocr.rubrics,
+                    'referenceScript': key_ocr.referenceScript,
                     'created_at': key_ocr.created_at,
                     'updated_at': key_ocr.updated_at
                 }
@@ -211,6 +211,7 @@ class KeyOCRView(View):
                     'key_json': key_ocr.key_json,
                     'context': key_ocr.context,
                     'rubrics': key_ocr.rubrics,
+                    'referenceScript': key_ocr.referenceScript,
                     'created_at': key_ocr.created_at,
                     'updated_at': key_ocr.updated_at
                 })
@@ -232,12 +233,13 @@ class KeyOCRView(View):
                     'error': f'Key OCR already exists for subject "{subject.subject_name}"'
                 }, status=400)
             
-            # Create key OCR - make context and rubrics optional
+            # Create key OCR - make context, rubrics, and referenceScript optional
             key_ocr = KeyOCR.objects.create(
                 subject=subject,
                 key_json=data['key_json'],
                 context=data.get('context', ''),  # Use empty string as default if context not provided
-                rubrics=data.get('rubrics', '')  # Use empty string as default if rubrics not provided
+                rubrics=data.get('rubrics', ''),  # Use empty string as default if rubrics not provided
+                referenceScript=data.get('referenceScript', {})  # Use empty dict as default if referenceScript not provided
             )
             
             return JsonResponse({
@@ -280,6 +282,9 @@ class KeyOCRView(View):
             
             if 'rubrics' in data:  # Update rubrics if provided (even if empty string)
                 key_ocr.rubrics = data['rubrics']
+            
+            if 'referenceScript' in data:  # Update referenceScript if provided (even if empty dict)
+                key_ocr.referenceScript = data['referenceScript']
             
             key_ocr.save()
             

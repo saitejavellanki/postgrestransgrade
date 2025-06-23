@@ -44,6 +44,7 @@ class KeyOCR(models.Model):
     key_json = models.JSONField()
     context = models.TextField(blank=True, null=True)
     rubrics = models.TextField(blank=True, null=True)
+    referenceScript = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
