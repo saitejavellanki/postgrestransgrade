@@ -1,6 +1,8 @@
 # Django Framework
 Django>=4.2,<5.0
 djangorestframework>=3.14.0
+dj-database-url
+
 
 # Database
 psycopg2-binary>=2.9.5
