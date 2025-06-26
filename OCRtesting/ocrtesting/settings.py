@@ -12,8 +12,6 @@ https://docs.djangoproject.com/en/3.2/ref/settings/
 
 from pathlib import Path
 import os
-import dj_database_url
-
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -83,13 +81,15 @@ WSGI_APPLICATION = 'ocrtesting.wsgi.application'
 # https://docs.djangoproject.com/en/3.2/ref/settings/#databases
 
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv("DATABASE_URL"),
-        conn_max_age=600,
-        ssl_require=True
-    )
+   'default': {
+       'ENGINE': 'django.db.backends.postgresql',
+       'NAME': 'transgrade',
+       'USER': 'ocrtesting',
+       'PASSWORD': '1234',
+       'HOST': '127.0.0.1',
+       'PORT': '5432',
+   }
 }
-
 
 
 # Password validation
